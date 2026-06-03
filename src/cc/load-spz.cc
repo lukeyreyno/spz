@@ -240,7 +240,7 @@ bool compressGzipped(const uint8_t *data, size_t size, std::vector<uint8_t> *out
 }
 
 bool compressZstd(const uint8_t *data, size_t size, std::vector<uint8_t> *out,
-                  int compressionLevel = 12) {
+                  int compressionLevel) {
   size_t const bound = ZSTD_compressBound(size);
   out->resize(bound);
 
@@ -253,6 +253,16 @@ bool compressZstd(const uint8_t *data, size_t size, std::vector<uint8_t> *out,
 
   if (ZSTD_isError(compressedSize)) return false;
   out->resize(compressedSize);
+  return true;
+}
+
+bool decompressZstd(const uint8_t *data, size_t size, std::vector<uint8_t> *out) {
+  const unsigned long long decoded = ZSTD_getFrameContentSize(data, size);
+  if (decoded == ZSTD_CONTENTSIZE_ERROR || decoded == ZSTD_CONTENTSIZE_UNKNOWN)
+    return false;
+  out->resize(static_cast<size_t>(decoded));
+  const size_t actual = ZSTD_decompress(out->data(), out->size(), data, size);
+  if (ZSTD_isError(actual) || actual != out->size()) return false;
   return true;
 }
 

@@ -188,6 +188,16 @@ void serializePackedGaussians(const PackedGaussians &packed, std::ostream *out);
 
 bool compressGzipped(const uint8_t *data, size_t size, std::vector<uint8_t> *out);
 
+// Compresses `data[0..size)` with zstd into *out. Default level matches the
+// internal stream compressor used for packed SPZ streams.
+bool compressZstd(const uint8_t *data, size_t size, std::vector<uint8_t> *out,
+                  int compressionLevel = 12);
+
+// Decompresses a zstd frame `data[0..size)` into *out. The frame must carry its
+// decoded content size (true for frames produced by compressZstd); *out is
+// resized to the decoded size. Returns false on any decode error.
+bool decompressZstd(const uint8_t *data, size_t size, std::vector<uint8_t> *out);
+
 // Returns true if the build has extension support enabled, false otherwise
 bool hasExtensionSupport();
 }  // namespace spz
