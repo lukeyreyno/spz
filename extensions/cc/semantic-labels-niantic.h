@@ -38,20 +38,15 @@ namespace spz {
 // `channelCount` records how many bits are meaningful; bits at index
 // >= channelCount must be zero.
 //
-// The label blob is compressed inside the extension payload. Readers that do
-// not know this extension still skip the whole record via the outer
-// [u32 type][u32 byteLength] envelope, so compression is transparent to them.
+// The label blob is always Zstd-compressed inside the extension payload.
+// Readers that do not know this extension still skip the whole record via the
+// outer [u32 type][u32 byteLength] envelope, so compression is transparent to
+// them.
 struct SpzExtensionSemanticLabelsNiantic : public SpzExtensionBase {
   static constexpr uint32_t kPayloadVersion = 1;
 
-  enum class Compression : uint8_t {
-    None = 0,
-    Zstd = 1,
-  };
-
   uint32_t payloadVersion = kPayloadVersion;
   uint8_t channelCount = 8;             // 1..8
-  Compression compression = Compression::Zstd;
   std::vector<uint8_t> labels;          // size should equal cloud.numPoints
 
   SpzExtensionSemanticLabelsNiantic();

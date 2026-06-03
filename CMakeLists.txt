@@ -268,6 +268,30 @@ if(SPZ_BUILD_TOOLS)
   install(TARGETS ply_to_spz spz_to_ply spz_info
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
   )
+
+  # Semantic labels tool requires extension support (uses the
+  # SPZ_NIANTIC_semantic_labels extension and GaussianCloud::extensions).
+  if(SPZ_BUILD_EXTENSIONS)
+    add_executable(ply_to_spz_semantics cli_tools/src/ply_to_spz_semantics.cpp)
+    target_link_libraries(ply_to_spz_semantics PRIVATE spz)
+    target_include_directories(ply_to_spz_semantics PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    set_target_properties(ply_to_spz_semantics PROPERTIES
+      CXX_STANDARD ${SPZ_CXX}
+      CXX_STANDARD_REQUIRED ON
+    )
+
+    add_executable(spz_dump_semantics cli_tools/src/spz_dump_semantics.cpp)
+    target_link_libraries(spz_dump_semantics PRIVATE spz)
+    target_include_directories(spz_dump_semantics PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    set_target_properties(spz_dump_semantics PROPERTIES
+      CXX_STANDARD ${SPZ_CXX}
+      CXX_STANDARD_REQUIRED ON
+    )
+
+    install(TARGETS ply_to_spz_semantics spz_dump_semantics
+      RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    )
+  endif()
 endif()
 
 # --- Python Bindings (nanobind) ---

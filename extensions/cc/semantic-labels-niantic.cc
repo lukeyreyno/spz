@@ -28,7 +28,7 @@ SOFTWARE.
 namespace spz {
 namespace {
 
-constexpr uint32_t kFixedHeaderBytes = 12u;  // version(4) + numLabels(4) + channelCount(1) + compression(1) + reserved(2)
+constexpr uint32_t kFixedHeaderBytes = 12u;  // version(4) + numLabels(4) + channelCount(1) + reserved(3)
 
 template <class T>
 bool readExact(std::istream& is, T& out) {
@@ -49,15 +49,9 @@ uint32_t SpzExtensionSemanticLabelsNiantic::payloadBytes() const {
 
 void SpzExtensionSemanticLabelsNiantic::write(std::ostream& os) const {
   std::vector<uint8_t> blob;
-  Compression effectiveCompression = compression;
-  if (compression == Compression::Zstd) {
-    if (!spz::compressZstd(labels.data(), labels.size(), &blob)) {
-      SpzLog("[SPZ WARNING] SemanticLabelsNiantic zstd encode failed; writing raw");
-      effectiveCompression = Compression::None;
-      blob.assign(labels.begin(), labels.end());
-    }
-  } else {
-    blob.assign(labels.begin(), labels.end());
+  if (!spz::compressZstd(labels.data(), labels.size(), &blob)) {
+    SpzLog("[SPZ ERROR] SemanticLabelsNiantic zstd encode failed; extension not written");
+    return;
   }
 
   const uint32_t t = static_cast<uint32_t>(extensionType);
@@ -65,20 +59,18 @@ void SpzExtensionSemanticLabelsNiantic::write(std::ostream& os) const {
   const uint32_t version = payloadVersion;
   const uint32_t numLabels = static_cast<uint32_t>(labels.size());
   const uint8_t channels = channelCount;
-  const uint8_t comp = static_cast<uint8_t>(effectiveCompression);
-  const uint8_t reserved[2] = {0, 0};
+  const uint8_t reserved[3] = {0, 0, 0};
 
   SpzLog("[SPZ] Writing extension: SemanticLabelsNiantic (numLabels=%u, channelCount=%u, "
-         "compression=%u, blobBytes=%u)",
+         "blobBytes=%u)",
          static_cast<unsigned>(numLabels), static_cast<unsigned>(channels),
-         static_cast<unsigned>(comp), static_cast<unsigned>(blob.size()));
+         static_cast<unsigned>(blob.size()));
 
   os.write(reinterpret_cast<const char*>(&t), sizeof(t));
   os.write(reinterpret_cast<const char*>(&len), sizeof(len));
   os.write(reinterpret_cast<const char*>(&version), sizeof(version));
   os.write(reinterpret_cast<const char*>(&numLabels), sizeof(numLabels));
   os.write(reinterpret_cast<const char*>(&channels), sizeof(channels));
-  os.write(reinterpret_cast<const char*>(&comp), sizeof(comp));
   os.write(reinterpret_cast<const char*>(reserved), sizeof(reserved));
   if (!blob.empty())
     os.write(reinterpret_cast<const char*>(blob.data()),
@@ -92,11 +84,10 @@ std::optional<SpzExtensionBasePtr> SpzExtensionSemanticLabelsNiantic::read(std::
   uint32_t version = 0;
   uint32_t numLabels = 0;
   uint8_t channelCount = 0;
-  uint8_t compression = 0;
-  uint8_t reserved[2] = {0, 0};
+  uint8_t reserved[3] = {0, 0, 0};
 
   if (!readExact(is, version) || !readExact(is, numLabels) ||
-      !readExact(is, channelCount) || !readExact(is, compression) ||
+      !readExact(is, channelCount) ||
       !is.read(reinterpret_cast<char*>(reserved), sizeof(reserved))) {
     SpzLog("[SPZ ERROR] Failed to read SemanticLabelsNiantic header");
     return std::nullopt;
@@ -114,37 +105,18 @@ std::optional<SpzExtensionBasePtr> SpzExtensionSemanticLabelsNiantic::read(std::
     return std::nullopt;
   }
 
-  // Read the rest of the payload as the blob (raw or compressed).
+  // Read the rest of the payload as the Zstd-compressed label blob.
   std::vector<uint8_t> blob{
       std::istreambuf_iterator<char>(is), std::istreambuf_iterator<char>()};
 
   rec->payloadVersion = version;
   rec->channelCount = channelCount;
-  rec->compression = static_cast<Compression>(compression);
 
-  switch (rec->compression) {
-    case Compression::None: {
-      if (blob.size() != numLabels) {
-        SpzLog("[SPZ ERROR] SemanticLabelsNiantic raw blob size %zu != numLabels %u",
-               blob.size(), static_cast<unsigned>(numLabels));
-        return std::nullopt;
-      }
-      rec->labels = std::move(blob);
-      break;
-    }
-    case Compression::Zstd: {
-      if (!spz::decompressZstd(blob.data(), blob.size(), &rec->labels) ||
-          rec->labels.size() != numLabels) {
-        SpzLog("[SPZ ERROR] SemanticLabelsNiantic zstd decode failed (compressed=%zu, expected=%u)",
-               blob.size(), static_cast<unsigned>(numLabels));
-        return std::nullopt;
-      }
-      break;
-    }
-    default:
-      SpzLog("[SPZ ERROR] SemanticLabelsNiantic unknown compression id %u",
-             static_cast<unsigned>(compression));
-      return std::nullopt;
+  if (!spz::decompressZstd(blob.data(), blob.size(), &rec->labels) ||
+      rec->labels.size() != numLabels) {
+    SpzLog("[SPZ ERROR] SemanticLabelsNiantic zstd decode failed (compressed=%zu, expected=%u)",
+           blob.size(), static_cast<unsigned>(numLabels));
+    return std::nullopt;
   }
 
   return std::optional{std::move(rec)};
