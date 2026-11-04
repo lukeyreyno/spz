@@ -55,6 +55,37 @@ const SH_CHANNELS = 3;
 // Coefficients per point for SH degrees 0..4, excluding the DC term.
 const SH_COEFFS_BY_DEGREE = [0, 3, 8, 15, 24];
 
+/** A per-point attribute stored with the SPZ_NIANTIC_custom_attribute extension. */
+export interface CustomAttribute {
+  name: string;
+  /** Floats per point. */
+  dim: number;
+  /** numPoints * dim floats, point-major. */
+  values: Float32Array;
+}
+
+export interface DecodedSplat {
+  geometry: BufferGeometry;
+  customAttributes: CustomAttribute[];
+}
+
+// Extensions reach JS as embind handles that must be released explicitly; the generated
+// typings don't declare that.
+interface EmbindHandle {
+  delete(): void;
+}
+
+function takeCustomAttributes(spz: SpzModule, extensions: unknown[]): CustomAttribute[] {
+  const attributes: CustomAttribute[] = [];
+  for (const ext of extensions) {
+    if (ext instanceof spz.SpzExtensionCustomAttributeNiantic) {
+      attributes.push({ name: ext.name, dim: ext.dim, values: ext.getValues() });
+    }
+    (ext as EmbindHandle).delete();
+  }
+  return attributes;
+}
+
 interface SplatArrays {
   centers: Float32Array;
   covariances: Float32Array;
@@ -141,18 +172,20 @@ function writeChunk(out: SplatArrays, attr: SplatAttribute, first: number, data:
 
 /**
  * Decodes an SPZ file with the spz reference library and builds a geometry for
- * three's `GaussianSplat`, in three's RUB coordinate frame.
+ * three's `GaussianSplat`, in three's RUB coordinate frame, along with the file's
+ * custom attributes.
  *
- * Preconditions: `spz` is an initialized module from `createSpzModule()`, and
- * `bytes` holds a complete `.spz` file. Rejects with the decoder's message if the
- * file is malformed or empty.
+ * Preconditions: `spz` is an initialized module from `createSpzModule()` built with
+ * SPZ_BUILD_EXTENSIONS, and `bytes` holds a complete `.spz` file. Rejects with the
+ * decoder's message if the file is malformed or empty.
  */
-export async function decodeSpzToSplatGeometry(spz: SpzModule, bytes: Uint8Array): Promise<BufferGeometry> {
+export async function decodeSpz(spz: SpzModule, bytes: Uint8Array): Promise<DecodedSplat> {
   let out: SplatArrays | undefined;
+  let customAttributes: CustomAttribute[] = [];
   const header = await loadSpzStreamingAsync(
     spz,
     bytes,
-    { to: spz.CoordinateSystem.RUB },
+    { to: spz.CoordinateSystem.RUB, customAttributes: null },
     (attr, first, data) => {
       if (!out) {
         throw new Error('SPZ decoder emitted data before its header');
@@ -161,6 +194,7 @@ export async function decodeSpzToSplatGeometry(spz: SpzModule, bytes: Uint8Array
     },
     (info) => {
       out = allocate(info);
+      customAttributes = takeCustomAttributes(spz, info.extensions);
     },
   );
   if (!out || header.numPoints === 0) {
@@ -170,5 +204,6 @@ export async function decodeSpzToSplatGeometry(spz: SpzModule, bytes: Uint8Array
   out.shBands.forEach((band, b) => {
     sh[`sh${b + 1}` as 'sh1' | 'sh2' | 'sh3'] = band.packed;
   });
-  return createGaussianSplatGeometry(out.centers, out.covariances, out.colors, sh);
+  const geometry = createGaussianSplatGeometry(out.centers, out.covariances, out.colors, sh);
+  return { geometry, customAttributes };
 }

@@ -36,7 +36,8 @@ import {
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GaussianSplat } from 'three/addons/objects/GaussianSplat.js';
 import createSpzModule from 'spz/spz.js';
-import { decodeSpzToSplatGeometry } from './spz-to-three';
+import { geometryColoredBy } from './attribute-colors';
+import { decodeSpz, type DecodedSplat } from './spz-to-three';
 
 const DEFAULT_FILE = 'samples/racoonfamily.spz';
 const FIELD_OF_VIEW_DEG = 60;
@@ -53,6 +54,9 @@ const FRAMING_CORE_FRACTION = 0.8;
 // splats outside it clamp into the nearest/farthest bin. 0.9 rather than higher because
 // some captures (hornedlizard) put ~5% of splats in a background shell ~200 units out.
 const SORT_CORE_FRACTION = 0.9;
+// Color-mode key for the file's own colors; other modes are keyed by custom attribute
+// name, which the format requires to be non-empty.
+const FILE_COLORS = '';
 
 // Splat colors are authored and blended in sRGB. With three's default linear working
 // space the output pass re-encodes them as if linear, washing the scene out.
@@ -61,6 +65,7 @@ ColorManagement.workingColorSpace = SRGBColorSpace;
 
 const status = document.getElementById('status')!;
 const picker = document.getElementById('file') as HTMLInputElement;
+const colorPicker = document.getElementById('colors') as HTMLSelectElement;
 
 const renderer = new WebGPURenderer();
 renderer.setPixelRatio(devicePixelRatio);
@@ -71,7 +76,14 @@ const scene = new Scene();
 const camera = new PerspectiveCamera(FIELD_OF_VIEW_DEG, innerWidth / innerHeight, NEAR_PLANE, FAR_PLANE);
 const controls = new OrbitControls(camera, renderer.domElement);
 const spzModule = createSpzModule();
-let current: GaussianSplat | undefined;
+
+interface LoadedFile {
+  decoded: DecodedSplat;
+  core: SplatCore;
+  // One GaussianSplat per color mode, built on first use; switching toggles visibility.
+  splats: Map<string, GaussianSplat>;
+}
+let loaded: LoadedFile | undefined;
 
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
@@ -125,32 +137,69 @@ function focusSort(splat: GaussianSplat, core: SplatCore): void {
 
 const elapsed = (since: number): number => Math.round(performance.now() - since);
 
+function disposeSplat(splat: GaussianSplat): void {
+  scene.remove(splat);
+  splat.geometry.dispose();
+  splat.material.dispose();
+  splat.splatGeometry.dispose();
+}
+
+async function buildSplat(file: LoadedFile, mode: string): Promise<GaussianSplat> {
+  const attribute = file.decoded.customAttributes.find((a) => a.name === mode);
+  const geometry = attribute ? geometryColoredBy(file.decoded.geometry, attribute) : file.decoded.geometry;
+  const splat = new GaussianSplat(geometry);
+  focusSort(splat, file.core);
+  // Build the GPU pipelines before the splat is visible, so the first frames don't stall on them.
+  await renderer.compileAsync(splat, camera, scene);
+  return splat;
+}
+
+/** Shows `file` in color mode `mode`. Precondition: `mode` is FILE_COLORS or one of its attribute names. */
+async function showColors(file: LoadedFile, mode: string): Promise<void> {
+  let splat = file.splats.get(mode);
+  if (!splat) {
+    status.textContent = `Building colors for ${mode || 'file colors'}…`;
+    const start = performance.now();
+    splat = await buildSplat(file, mode);
+    if (loaded !== file) {
+      disposeSplat(splat);
+      return;
+    }
+    file.splats.set(mode, splat);
+    scene.add(splat);
+    console.info(`Built ${mode || 'file colors'} in ${elapsed(start)} ms`);
+  }
+  for (const [key, candidate] of file.splats) {
+    candidate.visible = key === mode;
+  }
+  colorPicker.value = mode;
+  const splats = file.decoded.geometry.getAttribute('position').count.toLocaleString();
+  status.textContent = `${splats} splats · colored by ${mode || 'file colors'}`;
+}
+
+function listColorModes(file: LoadedFile): void {
+  const options = [new Option('File colors', FILE_COLORS)];
+  for (const { name, dim } of file.decoded.customAttributes) {
+    options.push(new Option(`${name} (${dim}-d)`, name));
+  }
+  colorPicker.replaceChildren(...options);
+  colorPicker.hidden = file.decoded.customAttributes.length === 0;
+}
+
 async function show(name: string, bytes: Uint8Array): Promise<void> {
   status.textContent = `Decoding ${name}…`;
-  let start = performance.now();
-  const geometry = await decodeSpzToSplatGeometry(await spzModule, bytes);
-  const decodeMs = elapsed(start);
+  const start = performance.now();
+  const decoded = await decodeSpz(await spzModule, bytes);
+  console.info(`Decoded ${name} in ${elapsed(start)} ms`);
 
-  if (current) {
-    scene.remove(current);
-    current.splatGeometry.dispose();
+  if (loaded) {
+    loaded.splats.forEach(disposeSplat);
   }
-  const splat = new GaussianSplat(geometry);
-  const core = sampleCore(geometry);
-  focusSort(splat, core);
-  frame(core);
-
-  // Build the GPU pipelines before the splat is visible, so the first frames don't stall on them.
-  status.textContent = `Compiling shaders for ${name}…`;
-  start = performance.now();
-  await renderer.compileAsync(splat, camera, scene);
-  const compileMs = elapsed(start);
-  scene.add(splat);
-  current = splat;
-
-  const splats = geometry.getAttribute('position').count.toLocaleString();
-  status.textContent = `${name}: ${splats} splats · decode ${decodeMs} ms · compile ${compileMs} ms`;
-  console.info(status.textContent);
+  const file: LoadedFile = { decoded, core: sampleCore(decoded.geometry), splats: new Map() };
+  loaded = file;
+  frame(file.core);
+  listColorModes(file);
+  await showColors(file, FILE_COLORS);
 }
 
 async function showUrl(url: string): Promise<void> {
@@ -170,6 +219,12 @@ picker.addEventListener('change', () => {
   const file = picker.files?.[0];
   if (file) {
     file.arrayBuffer().then((buffer) => show(file.name, new Uint8Array(buffer))).catch(reportError);
+  }
+});
+
+colorPicker.addEventListener('change', () => {
+  if (loaded) {
+    showColors(loaded, colorPicker.value).catch(reportError);
   }
 });
 
