@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SPZ three.js viewer</title>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #111; }
+      #hud {
+        position: absolute; top: 8px; left: 8px; padding: 6px 10px;
+        font: 13px system-ui, sans-serif; color: #eee; background: rgba(0, 0, 0, 0.6); border-radius: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="hud">
+      <input id="file" type="file" accept=".spz" />
+      <select id="colors" hidden></select>
+      <div id="status">Starting…</div>
+    </div>
+  </body>
+</html>
